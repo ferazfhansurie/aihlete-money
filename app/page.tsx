@@ -4,12 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /* ────────────────────────── model ────────────────────────── */
 
-type Item = { id: string; label: string; amount: string; rec: boolean };
+type Item = { id: string; label: string; amount: string; rec: boolean; cnt?: boolean };
 type Side = "in" | "out";
 type Month = { in: Item[]; out: Item[] };
 type Data = { v: 1; cur: string; months: Record<string, Month> };
 
 const KEY = "aihlete.money.v1";
+const CODE_KEY = "aihlete.money.code";
+const REV_KEY = "aihlete.money.rev";
+const SYNC_URL = "https://aihlete-money-sync.vercel.app/api/doc";
 const CURRENCIES = ["RM", "$", "€", "£", "¥", "₹", "S$", "A$"];
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -47,7 +50,13 @@ function parseAmt(raw: string) {
   return Number.isFinite(n) ? n * mult : 0;
 }
 
-const sum = (items: Item[]) => items.reduce((a, i) => a + parseAmt(i.amount), 0);
+const counted = (i: Item) => i.cnt !== false;
+/** In-hand money: only lines you've ticked as actually landed. */
+const sum = (items: Item[]) =>
+  items.reduce((a, i) => (counted(i) ? a + parseAmt(i.amount) : a), 0);
+/** Expected-but-not-landed: invoices you've sent, bills not yet paid. */
+const pending = (items: Item[]) =>
+  items.reduce((a, i) => (counted(i) ? a : a + parseAmt(i.amount)), 0);
 
 /** Tidy what you typed once you leave the field: "12k" → "12,000". */
 function tidy(raw: string) {
@@ -90,12 +99,44 @@ function resolve(data: Data, key: string): Month {
   return { in: [], out: [] };
 }
 
+/* ────────────────────────── sync ──────────────────────────
+ * No accounts. One shared code per person; the doc on the server is keyed by
+ * sha256(code), so the code itself never leaves the browser. Any device that
+ * knows the code reads and writes the same document.
+ */
+
+const CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+
+function newCode() {
+  const r = crypto.getRandomValues(new Uint8Array(12));
+  const s = Array.from(r, (x) => CODE_ALPHABET[x % CODE_ALPHABET.length]).join("");
+  return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}`;
+}
+
+const normalise = (code: string) => code.trim().toLowerCase().replace(/\s+/g, "");
+
+async function docId(code: string) {
+  const bytes = new TextEncoder().encode(`aihlete-money:${normalise(code)}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /* ────────────────────────── page ────────────────────────── */
 
 export default function Page() {
   const [data, setData] = useState<Data>(empty);
   const [key, setKey] = useState(() => monthKey(new Date()));
   const [ready, setReady] = useState(false);
+  const [code, setCode] = useState<string | null>(null);
+  const [panel, setPanel] = useState(false);
+  const [paste, setPaste] = useState("");
+  const [status, setStatus] = useState<"off" | "ok" | "busy" | "err">("off");
+  const [note, setNote] = useState("");
+  const idRef = useRef<string | null>(null);
+  const revRef = useRef(0);
+  const dataRef = useRef<Data>(data);
+  const holdPush = useRef(false);
+  dataRef.current = data;
 
   useEffect(() => {
     try {
@@ -106,6 +147,15 @@ export default function Page() {
       }
     } catch {
       /* corrupted store — start clean rather than crash */
+    }
+    try {
+      const saved = localStorage.getItem(CODE_KEY);
+      if (saved) {
+        setCode(saved);
+        revRef.current = Number(localStorage.getItem(REV_KEY) || 0);
+      }
+    } catch {
+      /* private-mode browsers can refuse storage; the app still works locally */
     }
     setReady(true);
   }, []);
@@ -132,6 +182,8 @@ export default function Page() {
 
   const income = sum(month.in);
   const spend = sum(month.out);
+  const dueIn = pending(month.in);
+  const dueOut = pending(month.out);
   const net = income - spend;
   const rate = income > 0 ? Math.round((net / income) * 100) : 0;
 
@@ -165,6 +217,136 @@ export default function Page() {
     const peak = Math.max(1, ...vals.map(Math.abs));
     return shown.map((k, i) => ({ k, bal: vals[i], h: Math.abs(vals[i]) / peak }));
   }, [shown, balances]);
+
+  /** Server is the tiebreaker: on any conflict we take what it has. */
+  const pull = useCallback(async () => {
+    const id = idRef.current;
+    if (!id) return;
+    setStatus("busy");
+    try {
+      const r = await fetch(`${SYNC_URL}?id=${id}`, { cache: "no-store" });
+      if (r.status === 404) {
+        setStatus("ok");
+        return "empty" as const;
+      }
+      if (!r.ok) throw new Error(String(r.status));
+      const remote = await r.json();
+      if (remote?.doc?.months) {
+        holdPush.current = true;
+        revRef.current = Number(remote.rev) || 0;
+        localStorage.setItem(REV_KEY, String(revRef.current));
+        setData({ v: 1, cur: remote.doc.cur || "RM", months: remote.doc.months });
+      }
+      setStatus("ok");
+      return "pulled" as const;
+    } catch {
+      setStatus("err");
+      return "failed" as const;
+    }
+  }, []);
+
+  const push = useCallback(async () => {
+    const id = idRef.current;
+    if (!id) return;
+    setStatus("busy");
+    try {
+      const r = await fetch(SYNC_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id, rev: revRef.current, doc: dataRef.current }),
+      });
+      if (r.status === 409) {
+        const winner = await r.json();
+        if (winner?.doc?.months) {
+          holdPush.current = true;
+          revRef.current = Number(winner.rev) || 0;
+          localStorage.setItem(REV_KEY, String(revRef.current));
+          setData({ v: 1, cur: winner.doc.cur || "RM", months: winner.doc.months });
+          setNote("another device was ahead — took its copy");
+        }
+        setStatus("ok");
+        return;
+      }
+      if (!r.ok) throw new Error(String(r.status));
+      const { rev } = await r.json();
+      revRef.current = Number(rev) || 0;
+      localStorage.setItem(REV_KEY, String(revRef.current));
+      setStatus("ok");
+    } catch {
+      setStatus("err");
+    }
+  }, []);
+
+  /* connect: adopt whatever the code already holds, or seed it with this device */
+  useEffect(() => {
+    if (!ready || !code) return;
+    let live = true;
+    (async () => {
+      idRef.current = await docId(code);
+      if (!live) return;
+      const outcome = await pull();
+      if (outcome === "empty") await push();
+    })();
+    return () => {
+      live = false;
+    };
+  }, [ready, code, pull, push]);
+
+  /* every edit lands on the server a beat later */
+  useEffect(() => {
+    if (!ready || !code) return;
+    if (holdPush.current) {
+      holdPush.current = false;
+      return;
+    }
+    const t = setTimeout(() => void push(), 900);
+    return () => clearTimeout(t);
+  }, [data, ready, code, push]);
+
+  /* coming back to the tab is the moment another device's edits should appear */
+  useEffect(() => {
+    if (!code) return;
+    const onWake = () => {
+      if (document.visibilityState === "visible") void pull();
+    };
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => {
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+    };
+  }, [code, pull]);
+
+  const startSync = () => {
+    const fresh = newCode();
+    localStorage.setItem(CODE_KEY, fresh);
+    localStorage.setItem(REV_KEY, "0");
+    revRef.current = 0;
+    setNote("this device is now the source — enter the code on your others");
+    setCode(fresh);
+    setPanel(true);
+  };
+
+  const connectSync = () => {
+    const c = normalise(paste);
+    if (c.length < 8) return setNote("that code looks too short");
+    localStorage.setItem(CODE_KEY, c);
+    localStorage.setItem(REV_KEY, "0");
+    revRef.current = 0;
+    setPaste("");
+    setNote("connected — pulling that device's numbers");
+    setCode(c);
+  };
+
+  const stopSync = () => {
+    localStorage.removeItem(CODE_KEY);
+    localStorage.removeItem(REV_KEY);
+    idRef.current = null;
+    revRef.current = 0;
+    setCode(null);
+    setStatus("off");
+    setNote("this device is on its own again — nothing was deleted");
+  };
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -212,6 +394,11 @@ export default function Page() {
   ]
     .filter(Boolean)
     .join(" · ");
+  const projected = balance + dueIn - dueOut;
+  const expected =
+    dueIn || dueOut
+      ? `${projected < 0 ? "−" : ""}${money(projected, data.cur)} if the expected lands`
+      : "";
 
   return (
     <>
@@ -239,12 +426,14 @@ export default function Page() {
         </span>
         <span className="cap">in hand end of {shownMonth}</span>
         <span className="sub">{sub}</span>
+        {expected ? <span className="exp">{expected}</span> : null}
       </div>
 
       <div className="cols">
         <List
           title="coming in"
           total={money(income, data.cur)}
+          due={dueIn ? `+${money(dueIn, data.cur)} expected` : ""}
           items={month.in}
           onEdit={(fn) => edit("in", fn)}
           placeholder="salary"
@@ -252,6 +441,7 @@ export default function Page() {
         <List
           title="going out"
           total={money(spend, data.cur)}
+          due={dueOut ? `+${money(dueOut, data.cur)} expected` : ""}
           items={month.out}
           onEdit={(fn) => edit("out", fn)}
           placeholder="rent"
@@ -281,8 +471,21 @@ export default function Page() {
       </div>
 
       <div className="foot">
-        <div>private · on this device · filled dot = repeats monthly</div>
+        <div>
+          {code
+            ? status === "busy"
+              ? "syncing…"
+              : status === "err"
+                ? "offline — will retry"
+                : "synced to every device with your code"
+            : "private · saved on this device"}
+          {" · "}
+          filled dot = repeats monthly
+        </div>
         <div className="acts">
+          <button className={code ? "live" : ""} onClick={() => setPanel(!panel)}>
+            sync
+          </button>
           <button
             onClick={() =>
               setData((d) => ({
@@ -311,6 +514,56 @@ export default function Page() {
           </label>
         </div>
       </div>
+
+      {panel ? (
+        <div className="sync card">
+          {code ? (
+            <>
+              <div className="line">
+                <span>your code</span>
+                <code>{code}</code>
+                <button
+                  onClick={() => {
+                    navigator.clipboard?.writeText(code);
+                    setNote("copied — paste it on your other device");
+                  }}
+                >
+                  copy
+                </button>
+              </div>
+              <p>
+                open money.aihlete.com on your phone or another browser, tap sync, and paste
+                this code. same numbers everywhere, both directions.
+              </p>
+              <div className="line">
+                <button onClick={() => void pull()}>pull now</button>
+                <button onClick={stopSync}>disconnect</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="line">
+                <button className="primary" onClick={startSync}>
+                  create a code
+                </button>
+                <span>for this device&apos;s numbers</span>
+              </div>
+              <div className="line">
+                <input
+                  value={paste}
+                  placeholder="or paste a code from another device"
+                  onChange={(e) => setPaste(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") connectSync();
+                  }}
+                />
+                <button onClick={connectSync}>connect</button>
+              </div>
+            </>
+          )}
+          {note ? <p className="note">{note}</p> : null}
+        </div>
+      ) : null}
       </main>
     </>
   );
@@ -321,12 +574,14 @@ export default function Page() {
 function List({
   title,
   total,
+  due,
   items,
   onEdit,
   placeholder,
 }: {
   title: string;
   total: string;
+  due: string;
   items: Item[];
   onEdit: (fn: (items: Item[]) => Item[]) => void;
   placeholder: string;
@@ -356,11 +611,15 @@ function List({
   return (
     <section className="col card">
       <h2>
-        {title} <b>{total}</b>
+        <span>
+          {title}
+          {due ? <em>{due}</em> : null}
+        </span>
+        <b>{total}</b>
       </h2>
 
       {items.map((i) => (
-        <div className="row" key={i.id}>
+        <div className={`row${counted(i) ? "" : " pending"}`} key={i.id}>
           <button
             className={`dot${i.rec ? " on" : ""}`}
             title={i.rec ? "repeats every month" : "one-off"}
@@ -397,6 +656,14 @@ function List({
               }
             }}
           />
+          <button
+            className={`chk${counted(i) ? " on" : ""}`}
+            title={counted(i) ? "counted as in hand" : "expected only — not counted"}
+            aria-label={counted(i) ? "counted as in hand" : "expected only"}
+            onClick={() => patch(i.id, { cnt: !counted(i) })}
+          >
+            <i>✓</i>
+          </button>
           <button className="del" title="remove" onClick={() => drop(i.id)}>
             ×
           </button>
@@ -436,6 +703,7 @@ function List({
             }
           }}
         />
+        <span className="chk" aria-hidden />
         <span className="del" aria-hidden />
       </div>
     </section>

@@ -270,3 +270,101 @@ input::placeholder { color: var(--faint); }
   transition: background 120ms ease, color 120ms ease;
 }
 .foot .acts button:hover { background: var(--elev-2); color: var(--text); }
+
+/* ── counted vs expected ────────────────────────────────────────────────
+   The checkbox is the "count this in hand" switch. Ticked = money that has
+   actually landed. Unticked = an invoice you've sent or a bill not yet paid:
+   visible, projected, but never in the big number. */
+.col h2 em {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-style: normal;
+  color: var(--faint);
+}
+
+.row .chk {
+  flex: 0 0 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+.row .chk i {
+  width: 15px;
+  height: 15px;
+  border-radius: 5px;
+  border: 1px solid var(--faint);
+  display: grid;
+  place-items: center;
+  font-size: 9.5px;
+  font-style: normal;
+  line-height: 1;
+  color: transparent;
+  transition: all 140ms ease;
+}
+.row .chk:hover i { border-color: var(--dim); }
+.row .chk.on i {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06101f;
+}
+
+.row.pending .val {
+  color: var(--dim);
+  text-decoration: underline dotted var(--faint);
+  text-underline-offset: 4px;
+}
+.row.pending .label { color: var(--dim); }
+
+.hero .exp { display: block; margin-top: 5px; font-size: 13.5px; color: var(--accent); }
+
+/* ── sync panel ── */
+.foot .acts button.live { color: var(--accent); border-color: var(--accent-soft); }
+
+.sync {
+  margin-top: 12px;
+  padding: 16px 18px;
+  font-size: 13.5px;
+  color: var(--dim);
+}
+.sync .line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 5px 0;
+}
+.sync code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  background: var(--elev-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px;
+}
+.sync button {
+  padding: 6px 13px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--elev);
+  color: var(--dim);
+  font-size: 12.5px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.sync button:hover { background: var(--elev-2); color: var(--text); }
+.sync button.primary { color: var(--accent); border-color: var(--accent-soft); }
+.sync input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--elev);
+  font-size: 13px;
+}
+.sync input:focus { border-color: var(--accent-soft); }
+.sync p { margin: 8px 0 4px; font-size: 12.5px; color: var(--faint); max-width: 52ch; line-height: 1.5; }
+.sync p.note { color: var(--accent); }
