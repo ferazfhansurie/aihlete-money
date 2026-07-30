@@ -85,6 +85,12 @@ input::placeholder { color: var(--faint); }
   text-transform: uppercase;
   color: var(--muted);
 }
+.hero .sub {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--faint);
+}
 
 /* ── columns ── */
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }

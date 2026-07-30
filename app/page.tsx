@@ -135,15 +135,36 @@ export default function Page() {
   const net = income - spend;
   const rate = income > 0 ? Math.round((net / income) * 100) : 0;
 
-  const strip = useMemo(() => {
-    const keys = Array.from({ length: 12 }, (_, i) => shiftMonth(key, i - 11));
-    const nets = keys.map((k) => {
-      const m = resolve(data, k);
-      return sum(m.in) - sum(m.out);
-    });
-    const peak = Math.max(1, ...nets.map(Math.abs));
-    return keys.map((k, i) => ({ k, net: nets[i], h: Math.abs(nets[i]) / peak }));
+  /**
+   * Money rolls over. Every month's balance is every earlier month's leftovers
+   * plus this month's net — so the strip is a balance curve, not 12 unrelated
+   * bars, and the big number answers "how much do I actually have".
+   */
+  const { balances, shown } = useMemo(() => {
+    const shownKeys = Array.from({ length: 12 }, (_, i) => shiftMonth(key, i - 11));
+    const touched = Object.keys(data.months).sort();
+    let cursor = shownKeys[0];
+    if (touched.length && touched[0] < cursor) cursor = touched[0];
+    const last = shownKeys[shownKeys.length - 1];
+    const out: Record<string, number> = {};
+    let running = 0;
+    for (let guard = 0; cursor <= last && guard < 600; guard++) {
+      const m = resolve(data, cursor);
+      running += sum(m.in) - sum(m.out);
+      out[cursor] = running;
+      cursor = shiftMonth(cursor, 1);
+    }
+    return { balances: out, shown: shownKeys };
   }, [data, key]);
+
+  const balance = balances[key] ?? net;
+  const carry = balance - net;
+
+  const strip = useMemo(() => {
+    const vals = shown.map((k) => balances[k] ?? 0);
+    const peak = Math.max(1, ...vals.map(Math.abs));
+    return shown.map((k, i) => ({ k, bal: vals[i], h: Math.abs(vals[i]) / peak }));
+  }, [shown, balances]);
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
@@ -169,8 +190,22 @@ export default function Page() {
 
   if (!ready) return <main className="wrap" />;
 
-  const verb = net > 0 ? "left over in" : net < 0 ? "short in" : "even in";
   const shownMonth = MONTH_NAMES[Number(key.split("-")[1]) - 1].toLowerCase();
+  const flow =
+    net > 0
+      ? `${money(net, data.cur)} left this month`
+      : net < 0
+        ? `${money(net, data.cur)} short this month`
+        : "even this month";
+  const sub = [
+    carry !== 0
+      ? `${carry < 0 ? "−" : ""}${money(carry, data.cur)} rolled over`
+      : "",
+    flow,
+    income > 0 && net >= 0 ? `${rate}% saved` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <main className="wrap">
@@ -190,18 +225,12 @@ export default function Page() {
       </div>
 
       <div className="hero">
-        <span className={`amount${net < 0 ? " short" : ""}`}>
-          {net < 0 ? "−" : ""}
-          {money(net, data.cur)}
+        <span className={`amount${balance < 0 ? " short" : ""}`}>
+          {balance < 0 ? "−" : ""}
+          {money(balance, data.cur)}
         </span>
-        <span className="cap">
-          {verb} {shownMonth}
-          {income > 0
-            ? net < 0
-              ? ` · ${Math.abs(rate)}% more than you make`
-              : ` · ${rate}% of what you make`
-            : ""}
-        </span>
+        <span className="cap">in hand end of {shownMonth}</span>
+        <span className="sub">{sub}</span>
       </div>
 
       <div className="cols">
@@ -226,9 +255,9 @@ export default function Page() {
           {strip.map((b) => (
             <button
               key={b.k}
-              className={`bar${b.net < 0 ? " neg" : ""}${b.k === key ? " now" : ""}`}
+              className={`bar${b.bal < 0 ? " neg" : ""}${b.k === key ? " now" : ""}`}
               onClick={() => setKey(b.k)}
-              title={`${monthLabel(b.k)} · ${b.net < 0 ? "−" : ""}${money(b.net, data.cur)}`}
+              title={`${monthLabel(b.k)} · ${b.bal < 0 ? "−" : ""}${money(b.bal, data.cur)} in hand`}
             >
               <i style={{ height: `${Math.max(1, b.h * 100)}%` }} />
             </button>
@@ -297,11 +326,16 @@ function List({
   const labelRef = useRef<HTMLInputElement>(null);
 
   const commit = () => {
-    if (!draft.label.trim() && !draft.amount.trim()) return;
-    onEdit((list) => [
-      ...list,
-      { id: uid(), label: draft.label.trim(), amount: tidy(draft.amount), rec: true },
-    ]);
+    let label = draft.label.trim();
+    let amount = draft.amount.trim();
+    // Typing a bare number into the name field is the obvious phone mistake —
+    // treat it as the amount instead of a line called "5700" worth nothing.
+    if (!amount && /^[\d.,]+k?$/i.test(label)) {
+      amount = label;
+      label = "";
+    }
+    if (!label && !amount) return;
+    onEdit((list) => [...list, { id: uid(), label, amount: tidy(amount), rec: true }]);
     setDraft({ label: "", amount: "" });
   };
 
@@ -331,7 +365,10 @@ function List({
             placeholder="what"
             onChange={(e) => patch(i.id, { label: e.target.value })}
             onBlur={() => {
-              if (!i.label.trim() && !i.amount.trim()) drop(i.id);
+              const l = i.label.trim();
+              if (!l && !i.amount.trim()) return drop(i.id);
+              if (!i.amount.trim() && /^[\d.,]+k?$/i.test(l))
+                patch(i.id, { label: "", amount: tidy(l) });
             }}
           />
           <input
