@@ -346,10 +346,18 @@ export default function Page() {
           return;
         }
         // Reload through a distinct url so a cached copy of "/" can't be served
-        // back to us, and only ever once per build so this can never loop.
-        if (sessionStorage.getItem("aihlete.money.reloadFor") === build) return;
-        sessionStorage.setItem("aihlete.money.reloadFor", build);
-        location.replace(`${location.pathname}?v=${encodeURIComponent(build)}`);
+        // back to us. A single attempt isn't enough: right after a deploy the
+        // edge can hand out the new version.json while still serving the old
+        // html, so give up only after a few spaced-out tries — never a loop,
+        // never permanently stuck on stale code either.
+        const K = "aihlete.money.reload";
+        const [seenBuild, tries, last] = (sessionStorage.getItem(K) || "::0").split(":");
+        const n = seenBuild === build ? Number(tries) || 0 : 0;
+        const since = Date.now() - (Number(last) || 0);
+        if (n >= 5) return;
+        if (n > 0 && since < 45000) return;
+        sessionStorage.setItem(K, `${build}:${n + 1}:${Date.now()}`);
+        location.replace(`${location.pathname}?v=${encodeURIComponent(build)}-${n + 1}`);
       } catch {
         /* offline: keep running what we have */
       }
