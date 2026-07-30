@@ -35,7 +35,7 @@ function shiftMonth(key: string, n: number) {
 
 function monthLabel(key: string) {
   const [y, m] = key.split("-").map(Number);
-  return `${MONTH_NAMES[m - 1]} ${y}`;
+  return `${MONTH_NAMES[m - 1].toLowerCase()} ${y}`;
 }
 
 /** "1,500" · "2.5k" · "rm 90" all land as numbers. */
@@ -188,7 +188,13 @@ export default function Page() {
     r.readAsText(file);
   };
 
-  if (!ready) return <main className="wrap" />;
+  if (!ready)
+    return (
+      <>
+        <div className="glow" aria-hidden />
+        <main className="wrap" />
+      </>
+    );
 
   const shownMonth = MONTH_NAMES[Number(key.split("-")[1]) - 1].toLowerCase();
   const flow =
@@ -208,7 +214,9 @@ export default function Page() {
     .join(" · ");
 
   return (
-    <main className="wrap">
+    <>
+      <div className="glow" aria-hidden />
+      <main className="wrap">
       <div className="top">
         <div className="brand">
           aihlete <span>/ money</span>
@@ -235,14 +243,14 @@ export default function Page() {
 
       <div className="cols">
         <List
-          title="Coming in"
+          title="coming in"
           total={money(income, data.cur)}
           items={month.in}
           onEdit={(fn) => edit("in", fn)}
           placeholder="salary"
         />
         <List
-          title="Going out"
+          title="going out"
           total={money(spend, data.cur)}
           items={month.out}
           onEdit={(fn) => edit("out", fn)}
@@ -250,12 +258,12 @@ export default function Page() {
         />
       </div>
 
-      <div className="strip">
+      <div className="strip card">
         <div className="bars">
           {strip.map((b) => (
             <button
               key={b.k}
-              className={`bar${b.bal < 0 ? " neg" : ""}${b.k === key ? " now" : ""}`}
+              className={`bar${b.bal < 0 ? " neg" : ""}${b.bal === 0 ? " zero" : ""}${b.k === key ? " now" : ""}`}
               onClick={() => setKey(b.k)}
               title={`${monthLabel(b.k)} · ${b.bal < 0 ? "−" : ""}${money(b.bal, data.cur)} in hand`}
             >
@@ -266,14 +274,14 @@ export default function Page() {
         <div className="keys">
           {strip.map((b) => (
             <span key={b.k} className={b.k === key ? "now" : ""}>
-              {MONTH_NAMES[Number(b.k.split("-")[1]) - 1][0]}
+              {MONTH_NAMES[Number(b.k.split("-")[1]) - 1][0].toLowerCase()}
             </span>
           ))}
         </div>
       </div>
 
       <div className="foot">
-        <div>private · saved on this device · • repeats every month</div>
+        <div>private · on this device · filled dot = repeats monthly</div>
         <div className="acts">
           <button
             onClick={() =>
@@ -303,7 +311,8 @@ export default function Page() {
           </label>
         </div>
       </div>
-    </main>
+      </main>
+    </>
   );
 }
 
@@ -345,7 +354,7 @@ function List({
   const drop = (id: string) => onEdit((list) => list.filter((i) => i.id !== id));
 
   return (
-    <section className="col">
+    <section className="col card">
       <h2>
         {title} <b>{total}</b>
       </h2>
@@ -356,9 +365,8 @@ function List({
             className={`dot${i.rec ? " on" : ""}`}
             title={i.rec ? "repeats every month" : "one-off"}
             onClick={() => patch(i.id, { rec: !i.rec })}
-          >
-            •
-          </button>
+            aria-label={i.rec ? "repeats every month" : "one-off"}
+          />
           <input
             className="label"
             value={i.label}
@@ -402,7 +410,7 @@ function List({
           commit();
         }}
       >
-        <span className="dot" aria-hidden>
+        <span className="dot plus" aria-hidden>
           +
         </span>
         <input
