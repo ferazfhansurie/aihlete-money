@@ -15,6 +15,11 @@ const CODE_KEY = "aihlete.money.code";
    the same numbers with no codes to pass around. */
 const GATE_HASH = "70f937c7e61e98fc561e0132e5f3c48702163f618a3899fa852cfe5a9987f9ba";
 const SYNC_URL = "https://aihlete-money-sync.vercel.app/api/doc";
+/* Stamped at build time and also written to /version.json. A browser holding a
+   cached bundle compares the two and reloads itself — github pages serves the
+   html with max-age=600, so without this a device can run week-old code and
+   silently disagree with the database. */
+const BUILD = process.env.NEXT_PUBLIC_BUILD || "dev";
 const CURRENCIES = ["RM", "$", "€", "£", "¥", "₹", "S$", "A$"];
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -293,6 +298,35 @@ export default function Page() {
       document.removeEventListener("visibilitychange", onWake);
     };
   }, [code, pull]);
+
+  /* a stale bundle self-heals: compare the deployed stamp with ours */
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const r = await fetch(`/version.json?t=${Date.now()}`, { cache: "no-store" });
+        if (!r.ok) return;
+        const { build } = await r.json();
+        if (!build || build === BUILD) return;
+        if (dirtyRef.current) {
+          setNote("new version ready — save, then it reloads");
+          return;
+        }
+        // Reload through a distinct url so a cached copy of "/" can't be served
+        // back to us, and only ever once per build so this can never loop.
+        if (sessionStorage.getItem("aihlete.money.reloadFor") === build) return;
+        sessionStorage.setItem("aihlete.money.reloadFor", build);
+        location.replace(`${location.pathname}?v=${encodeURIComponent(build)}`);
+      } catch {
+        /* offline: keep running what we have */
+      }
+    };
+    void check();
+    const onWake = () => {
+      if (document.visibilityState === "visible") void check();
+    };
+    document.addEventListener("visibilitychange", onWake);
+    return () => document.removeEventListener("visibilitychange", onWake);
+  }, []);
 
   /* ⌘S / ctrl+S saves */
   useEffect(() => {
@@ -576,6 +610,14 @@ function List({
             onClick={() => patch(i.id, { rec: !i.rec })}
             aria-label={i.rec ? "repeats every month" : "one-off"}
           />
+          <button
+            className={`chk${counted(i) ? " on" : ""}`}
+            title={counted(i) ? "counted as in hand" : "expected only — not counted"}
+            aria-label={counted(i) ? "counted as in hand" : "expected only"}
+            onClick={() => patch(i.id, { cnt: !counted(i) })}
+          >
+            <i>✓</i>
+          </button>
           <input
             className="label"
             value={i.label}
@@ -606,14 +648,6 @@ function List({
               }
             }}
           />
-          <button
-            className={`chk${counted(i) ? " on" : ""}`}
-            title={counted(i) ? "counted as in hand" : "expected only — not counted"}
-            aria-label={counted(i) ? "counted as in hand" : "expected only"}
-            onClick={() => patch(i.id, { cnt: !counted(i) })}
-          >
-            <i>✓</i>
-          </button>
           <button className="del" title="remove" onClick={() => drop(i.id)}>
             ×
           </button>
@@ -630,6 +664,7 @@ function List({
         <span className="dot plus" aria-hidden>
           +
         </span>
+        <span className="chk" aria-hidden />
         <input
           ref={labelRef}
           className="label"
@@ -653,7 +688,6 @@ function List({
             }
           }}
         />
-        <span className="chk" aria-hidden />
         <span className="del" aria-hidden />
       </div>
     </section>

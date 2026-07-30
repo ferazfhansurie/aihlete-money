@@ -2,7 +2,9 @@
 # money.aihlete.com — build the static export and publish it to the gh-pages branch.
 set -euo pipefail
 cd "$(dirname "$0")"
-npm run build
+BUILD=$(date +%s)
+printf '{"build":"%s"}\n' "$BUILD" > public/version.json
+NEXT_PUBLIC_BUILD="$BUILD" npm run build
 tmp=$(mktemp -d)
 cp -R out/. "$tmp"/
 touch "$tmp/.nojekyll"
