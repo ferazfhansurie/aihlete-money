@@ -252,14 +252,29 @@ export default function Page() {
         body: JSON.stringify({ id, rev: revRef.current, doc: dataRef.current }),
       });
       if (r.status === 409) {
-        // someone saved between our load and our save — their version wins and
-        // we show it, rather than silently overwriting their numbers.
+        // another device saved between our load and this write. re-base onto
+        // its revision and write again once: the edit in front of you wins,
+        // because losing what you just typed is worse than overwriting a value
+        // you set on another screen a moment ago.
         const winner = await r.json();
         revRef.current = Number(winner.rev) || 0;
+        const retry = await fetch(SYNC_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id, rev: revRef.current, doc: dataRef.current }),
+        });
+        if (retry.ok) {
+          const { rev } = await retry.json();
+          revRef.current = Number(rev) || 0;
+          setStamp({ rev: revRef.current, at: new Date().toISOString() });
+          setDirty(false);
+          setStatus("idle");
+          return;
+        }
         setData({ v: 1, cur: winner.doc?.cur || "RM", months: winner.doc?.months || {} });
         setDirty(false);
         setStatus("idle");
-        setNote("another device saved first — showing theirs, redo your change");
+        setNote("another device was editing too — showing its version");
         return;
       }
       if (!r.ok) throw new Error(String(r.status));
@@ -301,6 +316,13 @@ export default function Page() {
       document.removeEventListener("visibilitychange", onWake);
     };
   }, [code, pull]);
+
+  /* autosave — no button. fires a beat after you stop touching things. */
+  useEffect(() => {
+    if (!code || !loaded || !dirty) return;
+    const t = setTimeout(() => void save(), 800);
+    return () => clearTimeout(t);
+  }, [data, code, loaded, dirty, save]);
 
   /* an idle tab follows the database, so two open devices converge on their own */
   useEffect(() => {
@@ -540,13 +562,11 @@ export default function Page() {
         <div>
           {status === "loading"
             ? "loading…"
-            : status === "saving"
+            : status === "saving" || dirty
               ? "saving…"
               : status === "err"
-                ? "can't reach the database"
-                : dirty
-                  ? "unsaved changes"
-                  : "saved · everyone with the password sees this"}
+                ? "not saved — no connection, will retry"
+                : "saved · everyone with the password sees this"}
           {" · "}
           filled dot = repeats monthly
           {stamp
@@ -561,13 +581,6 @@ export default function Page() {
 
       </main>
 
-      {dirty || status === "saving" ? (
-        <div className="savebar">
-          <button onClick={() => void save()} disabled={status === "saving"}>
-            {status === "saving" ? "saving…" : "save"}
-          </button>
-        </div>
-      ) : null}
     </>
   );
 }

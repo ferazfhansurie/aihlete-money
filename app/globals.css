@@ -409,34 +409,6 @@ input::placeholder { color: var(--faint); }
   text-underline-offset: 3px;
 }
 
-/* ── the only button: appears when there's something to save, thumb-height ── */
-.savebar {
-  position: fixed;
-  left: 50%;
-  bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-  transform: translateX(-50%);
-  z-index: 5;
-  animation: rise 180ms ease-out;
-}
-@keyframes rise {
-  from { opacity: 0; transform: translate(-50%, 10px); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
-.savebar button {
-  padding: 13px 34px;
-  border: 0;
-  border-radius: 30px;
-  background: var(--accent);
-  color: #06101f;
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  box-shadow: 0 12px 34px -12px rgba(114, 167, 255, 0.75), 0 0 0 1px #ffffff1a inset;
-}
-.savebar button:hover { background: #8db8ff; }
-.savebar button:disabled { opacity: 0.7; cursor: default; }
-.wrap { padding-bottom: 104px; }
-
 /* phones: give the name column back the space the controls were eating */
 @media (max-width: 640px) {
   .card { padding: 16px 14px 8px; }
