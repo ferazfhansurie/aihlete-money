@@ -419,3 +419,36 @@ input::placeholder { color: var(--faint); }
   .row .del { flex: 0 0 18px; }
   .row .label { font-size: 14.5px; }
 }
+
+/* ── stamp this month onto the future ── */
+.carry {
+  display: block;
+  width: 100%;
+  margin-top: 14px;
+  padding: 15px 18px;
+  border: 1px dashed var(--line);
+  border-radius: 22px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 14px;
+  text-align: center;
+  transition: all 140ms ease;
+}
+.carry:hover {
+  border-color: var(--accent);
+  border-style: solid;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.carryrow { display: flex; gap: 10px; align-items: stretch; }
+.carryrow .carry { flex: 1 1 auto; }
+.carry.undo {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 15px 22px;
+  border-style: solid;
+  border-color: var(--neg-soft);
+  color: var(--neg);
+}
+.carry.undo:hover { border-color: var(--neg); color: var(--neg); background: var(--neg-soft); }

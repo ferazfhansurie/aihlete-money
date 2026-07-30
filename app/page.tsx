@@ -140,6 +140,7 @@ export default function Page() {
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "err">("idle");
   const [note, setNote] = useState("");
   const [stamp, setStamp] = useState<{ rev: number; at: string } | null>(null);
+  const [undo, setUndo] = useState<Data["months"] | null>(null);
   const idRef = useRef<string | null>(null);
   const revRef = useRef(0);
   const dataRef = useRef<Data>(data);
@@ -391,6 +392,39 @@ export default function Page() {
     return () => window.removeEventListener("beforeunload", onLeave);
   }, []);
 
+  /** Make every following month look like this one. */
+  const carryForward = (howMany = 12) => {
+    const source = resolve(data, key);
+    if (!source.in.length && !source.out.length) return;
+    if (
+      !confirm(
+        `copy ${monthLabel(key)} — ${source.in.length} coming in, ${source.out.length} going out — into the next ${howMany} months? it replaces whatever is in them.`,
+      )
+    )
+      return;
+    setData((d) => {
+      const months = { ...d.months };
+      for (let i = 1; i <= howMany; i++) {
+        const target = shiftMonth(key, i);
+        const clone = (side: Side) =>
+          source[side].map((x) => ({ ...x, id: `${target}:${x.id}` }));
+        months[target] = { in: clone("in"), out: clone("out") };
+      }
+      return { ...d, months };
+    });
+    setUndo(data.months);
+    setDirty(true);
+    setNote(`${monthLabel(key)} copied into the next ${howMany} months`);
+  };
+
+  const undoCarry = () => {
+    if (!undo) return;
+    setData((d) => ({ ...d, months: undo }));
+    setUndo(null);
+    setDirty(true);
+    setNote("copy undone");
+  };
+
   const unlock = async (candidate: string) => {
     if ((await sha("aihlete-money-gate:", candidate)) !== GATE_HASH) {
       setGateErr(true);
@@ -564,6 +598,17 @@ export default function Page() {
             </span>
           ))}
         </div>
+      </div>
+
+      <div className="carryrow">
+        <button className="carry" onClick={() => carryForward(12)}>
+          make the next 12 months follow {monthLabel(key)}
+        </button>
+        {undo ? (
+          <button className="carry undo" onClick={undoCarry}>
+            undo
+          </button>
+        ) : null}
       </div>
 
       <div className="foot">
