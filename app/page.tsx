@@ -139,6 +139,7 @@ export default function Page() {
   const [gateErr, setGateErr] = useState(false);
   const [status, setStatus] = useState<"idle" | "loading" | "saving" | "err">("idle");
   const [note, setNote] = useState("");
+  const [stamp, setStamp] = useState<{ rev: number; at: string } | null>(null);
   const idRef = useRef<string | null>(null);
   const revRef = useRef(0);
   const dataRef = useRef<Data>(data);
@@ -228,6 +229,7 @@ export default function Page() {
       if (!r.ok) throw new Error(String(r.status));
       const remote = await r.json();
       revRef.current = Number(remote.rev) || 0;
+      setStamp({ rev: revRef.current, at: remote.updated_at });
       setData({ v: 1, cur: remote.doc?.cur || "RM", months: remote.doc?.months || {} });
       setDirty(false);
       setLoaded(true);
@@ -263,6 +265,7 @@ export default function Page() {
       if (!r.ok) throw new Error(String(r.status));
       const { rev } = await r.json();
       revRef.current = Number(rev) || 0;
+      setStamp({ rev: revRef.current, at: new Date().toISOString() });
       setDirty(false);
       setStatus("idle");
       setNote("saved");
@@ -297,6 +300,15 @@ export default function Page() {
       window.removeEventListener("focus", onWake);
       document.removeEventListener("visibilitychange", onWake);
     };
+  }, [code, pull]);
+
+  /* an idle tab follows the database, so two open devices converge on their own */
+  useEffect(() => {
+    if (!code) return;
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible" && !dirtyRef.current) void pull(true);
+    }, 20000);
+    return () => clearInterval(t);
   }, [code, pull]);
 
   /* a stale bundle self-heals: compare the deployed stamp with ours */
@@ -537,6 +549,13 @@ export default function Page() {
                   : "saved · everyone with the password sees this"}
           {" · "}
           filled dot = repeats monthly
+          {stamp
+            ? ` · rev ${stamp.rev}, saved ${new Date(stamp.at).toLocaleTimeString([], {
+                hour: "2-digit",
+                minute: "2-digit",
+              })}`
+            : ""}
+          {note && !dirty ? ` · ${note}` : ""}
         </div>
       </div>
 
