@@ -11,6 +11,10 @@ type Data = { v: 1; cur: string; months: Record<string, Month> };
 
 const KEY = "aihlete.money.v1";
 const CODE_KEY = "aihlete.money.code";
+/* sha256("aihlete-money-gate:<password>") — the password itself isn't in the
+   bundle, and it doubles as the document key, so everyone who unlocks lands on
+   the same numbers with no codes to pass around. */
+const GATE_HASH = "70f937c7e61e98fc561e0132e5f3c48702163f618a3899fa852cfe5a9987f9ba";
 const REV_KEY = "aihlete.money.rev";
 const SYNC_URL = "https://aihlete-money-sync.vercel.app/api/doc";
 const CURRENCIES = ["RM", "$", "€", "£", "¥", "₹", "S$", "A$"];
@@ -99,21 +103,19 @@ function resolve(data: Data, key: string): Month {
   return { in: [], out: [] };
 }
 
-/* ────────────────────────── sync ──────────────────────────
- * No accounts. One shared code per person; the doc on the server is keyed by
- * sha256(code), so the code itself never leaves the browser. Any device that
- * knows the code reads and writes the same document.
+/* ────────────────────────── shared store ──────────────────────────
+ * No accounts. The password IS the key: the server document is keyed by
+ * sha256(password), so the password never leaves the browser and everyone who
+ * types it reads and writes the same numbers.
  */
 
-const CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
-
-function newCode() {
-  const r = crypto.getRandomValues(new Uint8Array(12));
-  const s = Array.from(r, (x) => CODE_ALPHABET[x % CODE_ALPHABET.length]).join("");
-  return `${s.slice(0, 4)}-${s.slice(4, 8)}-${s.slice(8, 12)}`;
-}
-
 const normalise = (code: string) => code.trim().toLowerCase().replace(/\s+/g, "");
+
+async function sha(prefix: string, value: string) {
+  const bytes = new TextEncoder().encode(`${prefix}${normalise(value)}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 async function docId(code: string) {
   const bytes = new TextEncoder().encode(`aihlete-money:${normalise(code)}`);
@@ -128,8 +130,8 @@ export default function Page() {
   const [key, setKey] = useState(() => monthKey(new Date()));
   const [ready, setReady] = useState(false);
   const [code, setCode] = useState<string | null>(null);
-  const [panel, setPanel] = useState(false);
-  const [paste, setPaste] = useState("");
+  const [pw, setPw] = useState("");
+  const [gateErr, setGateErr] = useState(false);
   const [status, setStatus] = useState<"off" | "ok" | "busy" | "err">("off");
   const [note, setNote] = useState("");
   const idRef = useRef<string | null>(null);
@@ -317,35 +319,27 @@ export default function Page() {
     };
   }, [code, pull]);
 
-  const startSync = () => {
-    const fresh = newCode();
-    localStorage.setItem(CODE_KEY, fresh);
-    localStorage.setItem(REV_KEY, "0");
-    revRef.current = 0;
-    setNote("this device is now the source — enter the code on your others");
-    setCode(fresh);
-    setPanel(true);
-  };
-
-  const connectSync = () => {
-    const c = normalise(paste);
-    if (c.length < 8) return setNote("that code looks too short");
+  const unlock = async (candidate: string) => {
+    if ((await sha("aihlete-money-gate:", candidate)) !== GATE_HASH) {
+      setGateErr(true);
+      return;
+    }
+    const c = normalise(candidate);
     localStorage.setItem(CODE_KEY, c);
     localStorage.setItem(REV_KEY, "0");
     revRef.current = 0;
-    setPaste("");
-    setNote("connected — pulling that device's numbers");
+    setGateErr(false);
+    setPw("");
     setCode(c);
   };
 
-  const stopSync = () => {
+  const lock = () => {
     localStorage.removeItem(CODE_KEY);
     localStorage.removeItem(REV_KEY);
     idRef.current = null;
     revRef.current = 0;
     setCode(null);
     setStatus("off");
-    setNote("this device is on its own again — nothing was deleted");
   };
 
   const exportJson = () => {
@@ -399,6 +393,42 @@ export default function Page() {
     dueIn || dueOut
       ? `${projected < 0 ? "−" : ""}${money(projected, data.cur)} if the expected lands`
       : "";
+
+  if (!code)
+    return (
+      <>
+        <div className="glow" aria-hidden />
+        <main className="wrap gate">
+          <div className="brand">
+            aihlete <span>/ money</span>
+          </div>
+          <form
+            className="lock card"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void unlock(pw);
+            }}
+          >
+            <label htmlFor="pw">password</label>
+            <input
+              id="pw"
+              type="password"
+              autoFocus
+              autoComplete="current-password"
+              value={pw}
+              placeholder="••••••••"
+              onChange={(e) => {
+                setPw(e.target.value);
+                setGateErr(false);
+              }}
+            />
+            <button type="submit">open</button>
+            {gateErr ? <p className="bad">wrong password</p> : null}
+          </form>
+          <p className="fine">one shared set of numbers. everyone who has the password sees the same thing.</p>
+        </main>
+      </>
+    );
 
   return (
     <>
@@ -472,20 +502,16 @@ export default function Page() {
 
       <div className="foot">
         <div>
-          {code
-            ? status === "busy"
-              ? "syncing…"
-              : status === "err"
-                ? "offline — will retry"
-                : "synced to every device with your code"
-            : "private · saved on this device"}
+          {status === "busy"
+            ? "saving…"
+            : status === "err"
+              ? "offline — will retry"
+              : "shared · everyone with the password sees this"}
           {" · "}
           filled dot = repeats monthly
+          {note ? ` · ${note}` : ""}
         </div>
         <div className="acts">
-          <button className={code ? "live" : ""} onClick={() => setPanel(!panel)}>
-            sync
-          </button>
           <button
             onClick={() =>
               setData((d) => ({
@@ -496,6 +522,7 @@ export default function Page() {
           >
             {data.cur}
           </button>
+          <button onClick={() => void pull()}>refresh</button>
           <button onClick={exportJson}>export</button>
           <label>
             <button onClick={(e) => (e.currentTarget.nextElementSibling as HTMLInputElement)?.click()}>
@@ -512,58 +539,10 @@ export default function Page() {
               }}
             />
           </label>
+          <button onClick={lock}>lock</button>
         </div>
       </div>
 
-      {panel ? (
-        <div className="sync card">
-          {code ? (
-            <>
-              <div className="line">
-                <span>your code</span>
-                <code>{code}</code>
-                <button
-                  onClick={() => {
-                    navigator.clipboard?.writeText(code);
-                    setNote("copied — paste it on your other device");
-                  }}
-                >
-                  copy
-                </button>
-              </div>
-              <p>
-                open money.aihlete.com on your phone or another browser, tap sync, and paste
-                this code. same numbers everywhere, both directions.
-              </p>
-              <div className="line">
-                <button onClick={() => void pull()}>pull now</button>
-                <button onClick={stopSync}>disconnect</button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="line">
-                <button className="primary" onClick={startSync}>
-                  create a code
-                </button>
-                <span>for this device&apos;s numbers</span>
-              </div>
-              <div className="line">
-                <input
-                  value={paste}
-                  placeholder="or paste a code from another device"
-                  onChange={(e) => setPaste(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") connectSync();
-                  }}
-                />
-                <button onClick={connectSync}>connect</button>
-              </div>
-            </>
-          )}
-          {note ? <p className="note">{note}</p> : null}
-        </div>
-      ) : null}
       </main>
     </>
   );

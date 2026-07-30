@@ -368,3 +368,29 @@ input::placeholder { color: var(--faint); }
 .sync input:focus { border-color: var(--accent-soft); }
 .sync p { margin: 8px 0 4px; font-size: 12.5px; color: var(--faint); max-width: 52ch; line-height: 1.5; }
 .sync p.note { color: var(--accent); }
+
+/* ── password gate ── */
+.wrap.gate { max-width: 420px; padding-top: 22vh; }
+.wrap.gate .brand { margin-bottom: 22px; }
+.lock { display: flex; flex-direction: column; gap: 10px; padding: 22px; }
+.lock label { font-size: 13px; color: var(--dim); }
+.lock input {
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--elev);
+  font-size: 16px;
+  letter-spacing: 0.08em;
+}
+.lock input:focus { border-color: var(--accent); }
+.lock button {
+  padding: 11px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--accent-soft);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 15px;
+}
+.lock button:hover { background: #72a7ff33; }
+.lock .bad { margin: 2px 0 0; font-size: 12.5px; color: var(--neg); }
+.wrap.gate .fine { margin-top: 14px; font-size: 12.5px; color: var(--faint); line-height: 1.5; }
