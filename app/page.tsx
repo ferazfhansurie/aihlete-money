@@ -9,13 +9,11 @@ type Side = "in" | "out";
 type Month = { in: Item[]; out: Item[] };
 type Data = { v: 1; cur: string; months: Record<string, Month> };
 
-const KEY = "aihlete.money.v1";
 const CODE_KEY = "aihlete.money.code";
 /* sha256("aihlete-money-gate:<password>") — the password itself isn't in the
    bundle, and it doubles as the document key, so everyone who unlocks lands on
    the same numbers with no codes to pass around. */
 const GATE_HASH = "70f937c7e61e98fc561e0132e5f3c48702163f618a3899fa852cfe5a9987f9ba";
-const REV_KEY = "aihlete.money.rev";
 const SYNC_URL = "https://aihlete-money-sync.vercel.app/api/doc";
 const CURRENCIES = ["RM", "$", "€", "£", "¥", "₹", "S$", "A$"];
 const MONTH_NAMES = [
@@ -129,48 +127,36 @@ export default function Page() {
   const [data, setData] = useState<Data>(empty);
   const [key, setKey] = useState(() => monthKey(new Date()));
   const [ready, setReady] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [code, setCode] = useState<string | null>(null);
   const [pw, setPw] = useState("");
   const [gateErr, setGateErr] = useState(false);
-  const [status, setStatus] = useState<"off" | "ok" | "busy" | "err">("off");
+  const [status, setStatus] = useState<"idle" | "loading" | "saving" | "err">("idle");
   const [note, setNote] = useState("");
   const idRef = useRef<string | null>(null);
   const revRef = useRef(0);
   const dataRef = useRef<Data>(data);
-  const holdPush = useRef(false);
+  const dirtyRef = useRef(false);
   dataRef.current = data;
+  dirtyRef.current = dirty;
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(KEY);
-      if (raw) {
-        const p = JSON.parse(raw) as Data;
-        if (p && p.months) setData({ v: 1, cur: p.cur || "RM", months: p.months });
-      }
-    } catch {
-      /* corrupted store — start clean rather than crash */
-    }
-    try {
       const saved = localStorage.getItem(CODE_KEY);
-      if (saved) {
-        setCode(saved);
-        revRef.current = Number(localStorage.getItem(REV_KEY) || 0);
-      }
+      if (saved) setCode(saved);
     } catch {
-      /* private-mode browsers can refuse storage; the app still works locally */
+      /* private-mode browsers can refuse storage; the gate still works */
     }
     setReady(true);
   }, []);
-
-  useEffect(() => {
-    if (ready) localStorage.setItem(KEY, JSON.stringify(data));
-  }, [data, ready]);
 
   const month = useMemo(() => resolve(data, key), [data, key]);
 
   /** Materialise the shown month (it may be an inherited preview), then edit. */
   const edit = useCallback(
     (side: Side, fn: (items: Item[]) => Item[]) => {
+      setDirty(true);
       setData((d) => {
         const cur = resolve(d, key);
         return {
@@ -220,37 +206,38 @@ export default function Page() {
     return shown.map((k, i) => ({ k, bal: vals[i], h: Math.abs(vals[i]) / peak }));
   }, [shown, balances]);
 
-  /** Server is the tiebreaker: on any conflict we take what it has. */
-  const pull = useCallback(async () => {
+  /** The database is the only truth. Nothing is read from this device. */
+  const pull = useCallback(async (quiet = false) => {
     const id = idRef.current;
     if (!id) return;
-    setStatus("busy");
+    if (!quiet) setStatus("loading");
     try {
       const r = await fetch(`${SYNC_URL}?id=${id}`, { cache: "no-store" });
       if (r.status === 404) {
-        setStatus("ok");
-        return "empty" as const;
+        revRef.current = 0;
+        setData(empty());
+        setLoaded(true);
+        setStatus("idle");
+        return;
       }
       if (!r.ok) throw new Error(String(r.status));
       const remote = await r.json();
-      if (remote?.doc?.months) {
-        holdPush.current = true;
-        revRef.current = Number(remote.rev) || 0;
-        localStorage.setItem(REV_KEY, String(revRef.current));
-        setData({ v: 1, cur: remote.doc.cur || "RM", months: remote.doc.months });
-      }
-      setStatus("ok");
-      return "pulled" as const;
+      revRef.current = Number(remote.rev) || 0;
+      setData({ v: 1, cur: remote.doc?.cur || "RM", months: remote.doc?.months || {} });
+      setDirty(false);
+      setLoaded(true);
+      setStatus("idle");
+      if (!quiet) setNote("");
     } catch {
       setStatus("err");
-      return "failed" as const;
     }
   }, []);
 
-  const push = useCallback(async () => {
+  /** Only ever called by the save button — no background writes. */
+  const save = useCallback(async () => {
     const id = idRef.current;
     if (!id) return;
-    setStatus("busy");
+    setStatus("saving");
     try {
       const r = await fetch(SYNC_URL, {
         method: "POST",
@@ -258,58 +245,46 @@ export default function Page() {
         body: JSON.stringify({ id, rev: revRef.current, doc: dataRef.current }),
       });
       if (r.status === 409) {
+        // someone saved between our load and our save — their version wins and
+        // we show it, rather than silently overwriting their numbers.
         const winner = await r.json();
-        if (winner?.doc?.months) {
-          holdPush.current = true;
-          revRef.current = Number(winner.rev) || 0;
-          localStorage.setItem(REV_KEY, String(revRef.current));
-          setData({ v: 1, cur: winner.doc.cur || "RM", months: winner.doc.months });
-          setNote("another device was ahead — took its copy");
-        }
-        setStatus("ok");
+        revRef.current = Number(winner.rev) || 0;
+        setData({ v: 1, cur: winner.doc?.cur || "RM", months: winner.doc?.months || {} });
+        setDirty(false);
+        setStatus("idle");
+        setNote("another device saved first — showing theirs, redo your change");
         return;
       }
       if (!r.ok) throw new Error(String(r.status));
       const { rev } = await r.json();
       revRef.current = Number(rev) || 0;
-      localStorage.setItem(REV_KEY, String(revRef.current));
-      setStatus("ok");
+      setDirty(false);
+      setStatus("idle");
+      setNote("saved");
     } catch {
       setStatus("err");
+      setNote("save failed — still unsaved, try again");
     }
   }, []);
 
-  /* connect: adopt whatever the code already holds, or seed it with this device */
+  /* unlock → load from the database */
   useEffect(() => {
     if (!ready || !code) return;
     let live = true;
     (async () => {
       idRef.current = await docId(code);
-      if (!live) return;
-      const outcome = await pull();
-      if (outcome === "empty") await push();
+      if (live) await pull();
     })();
     return () => {
       live = false;
     };
-  }, [ready, code, pull, push]);
+  }, [ready, code, pull]);
 
-  /* every edit lands on the server a beat later */
-  useEffect(() => {
-    if (!ready || !code) return;
-    if (holdPush.current) {
-      holdPush.current = false;
-      return;
-    }
-    const t = setTimeout(() => void push(), 900);
-    return () => clearTimeout(t);
-  }, [data, ready, code, push]);
-
-  /* coming back to the tab is the moment another device's edits should appear */
+  /* coming back to the tab refreshes — unless you have unsaved edits */
   useEffect(() => {
     if (!code) return;
     const onWake = () => {
-      if (document.visibilityState === "visible") void pull();
+      if (document.visibilityState === "visible" && !dirtyRef.current) void pull(true);
     };
     window.addEventListener("focus", onWake);
     document.addEventListener("visibilitychange", onWake);
@@ -319,6 +294,27 @@ export default function Page() {
     };
   }, [code, pull]);
 
+  /* ⌘S / ctrl+S saves */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void save();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [save]);
+
+  /* warn before losing unsaved edits */
+  useEffect(() => {
+    const onLeave = (e: BeforeUnloadEvent) => {
+      if (dirtyRef.current) e.preventDefault();
+    };
+    window.addEventListener("beforeunload", onLeave);
+    return () => window.removeEventListener("beforeunload", onLeave);
+  }, []);
+
   const unlock = async (candidate: string) => {
     if ((await sha("aihlete-money-gate:", candidate)) !== GATE_HASH) {
       setGateErr(true);
@@ -326,7 +322,6 @@ export default function Page() {
     }
     const c = normalise(candidate);
     localStorage.setItem(CODE_KEY, c);
-    localStorage.setItem(REV_KEY, "0");
     revRef.current = 0;
     setGateErr(false);
     setPw("");
@@ -335,11 +330,12 @@ export default function Page() {
 
   const lock = () => {
     localStorage.removeItem(CODE_KEY);
-    localStorage.removeItem(REV_KEY);
     idRef.current = null;
     revRef.current = 0;
     setCode(null);
-    setStatus("off");
+    setLoaded(false);
+    setData(empty());
+    setStatus("idle");
   };
 
   const exportJson = () => {
@@ -356,7 +352,10 @@ export default function Page() {
     r.onload = () => {
       try {
         const p = JSON.parse(String(r.result)) as Data;
-        if (p && p.months) setData({ v: 1, cur: p.cur || "RM", months: p.months });
+        if (p && p.months) {
+          setData({ v: 1, cur: p.cur || "RM", months: p.months });
+          setDirty(true);
+        }
       } catch {
         alert("that file isn't a money export");
       }
@@ -393,6 +392,22 @@ export default function Page() {
     dueIn || dueOut
       ? `${projected < 0 ? "−" : ""}${money(projected, data.cur)} if the expected lands`
       : "";
+
+  if (code && !loaded)
+    return (
+      <>
+        <div className="glow" aria-hidden />
+        <main className="wrap gate">
+          <div className="brand">
+            aihlete <span>/ money</span>
+          </div>
+          <p className="fine">
+            {status === "err" ? "can't reach the database — " : "loading from the database…"}
+            {status === "err" ? <button className="link" onClick={() => void pull()}>retry</button> : null}
+          </p>
+        </main>
+      </>
+    );
 
   if (!code)
     return (
@@ -502,27 +517,46 @@ export default function Page() {
 
       <div className="foot">
         <div>
-          {status === "busy"
-            ? "saving…"
-            : status === "err"
-              ? "offline — will retry"
-              : "shared · everyone with the password sees this"}
+          {status === "loading"
+            ? "loading…"
+            : status === "saving"
+              ? "saving…"
+              : status === "err"
+                ? "can't reach the database"
+                : dirty
+                  ? "unsaved changes"
+                  : "saved · everyone with the password sees this"}
           {" · "}
           filled dot = repeats monthly
-          {note ? ` · ${note}` : ""}
+          {note && !dirty ? ` · ${note}` : ""}
         </div>
         <div className="acts">
           <button
-            onClick={() =>
+            className={dirty ? "primary" : ""}
+            disabled={!dirty || status === "saving"}
+            onClick={() => void save()}
+          >
+            {status === "saving" ? "saving…" : dirty ? "save" : "saved"}
+          </button>
+          <button
+            onClick={() => {
+              if (dirty && !confirm("discard your unsaved changes and reload from the database?")) return;
+              void pull();
+            }}
+          >
+            refresh
+          </button>
+          <button
+            onClick={() => {
+              setDirty(true);
               setData((d) => ({
                 ...d,
                 cur: CURRENCIES[(CURRENCIES.indexOf(d.cur) + 1) % CURRENCIES.length],
-              }))
-            }
+              }));
+            }}
           >
             {data.cur}
           </button>
-          <button onClick={() => void pull()}>refresh</button>
           <button onClick={exportJson}>export</button>
           <label>
             <button onClick={(e) => (e.currentTarget.nextElementSibling as HTMLInputElement)?.click()}>
