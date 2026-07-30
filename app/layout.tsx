@@ -5,6 +5,9 @@ export const metadata: Metadata = {
   title: "aihlete — money",
   description:
     "One page. What comes in, what goes out, what's left. Free, private, saved on your device.",
+  manifest: "/manifest.webmanifest",
+  icons: { icon: "/icon.svg", apple: "/icon.svg" },
+  appleWebApp: { capable: true, title: "money", statusBarStyle: "default" },
 };
 
 export const viewport: Viewport = {
