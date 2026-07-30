@@ -338,31 +338,6 @@ export default function Page() {
     setStatus("idle");
   };
 
-  const exportJson = () => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `aihlete-money-${key}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  };
-
-  const importJson = (file: File) => {
-    const r = new FileReader();
-    r.onload = () => {
-      try {
-        const p = JSON.parse(String(r.result)) as Data;
-        if (p && p.months) {
-          setData({ v: 1, cur: p.cur || "RM", months: p.months });
-          setDirty(true);
-        }
-      } catch {
-        alert("that file isn't a money export");
-      }
-    };
-    r.readAsText(file);
-  };
-
   if (!ready)
     return (
       <>
@@ -528,56 +503,18 @@ export default function Page() {
                   : "saved · everyone with the password sees this"}
           {" · "}
           filled dot = repeats monthly
-          {note && !dirty ? ` · ${note}` : ""}
-        </div>
-        <div className="acts">
-          <button
-            className={dirty ? "primary" : ""}
-            disabled={!dirty || status === "saving"}
-            onClick={() => void save()}
-          >
-            {status === "saving" ? "saving…" : dirty ? "save" : "saved"}
-          </button>
-          <button
-            onClick={() => {
-              if (dirty && !confirm("discard your unsaved changes and reload from the database?")) return;
-              void pull();
-            }}
-          >
-            refresh
-          </button>
-          <button
-            onClick={() => {
-              setDirty(true);
-              setData((d) => ({
-                ...d,
-                cur: CURRENCIES[(CURRENCIES.indexOf(d.cur) + 1) % CURRENCIES.length],
-              }));
-            }}
-          >
-            {data.cur}
-          </button>
-          <button onClick={exportJson}>export</button>
-          <label>
-            <button onClick={(e) => (e.currentTarget.nextElementSibling as HTMLInputElement)?.click()}>
-              import
-            </button>
-            <input
-              type="file"
-              accept="application/json"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) importJson(f);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <button onClick={lock}>lock</button>
         </div>
       </div>
 
       </main>
+
+      {dirty || status === "saving" ? (
+        <div className="savebar">
+          <button onClick={() => void save()} disabled={status === "saving"}>
+            {status === "saving" ? "saving…" : "save"}
+          </button>
+        </div>
+      ) : null}
     </>
   );
 }
