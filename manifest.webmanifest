@@ -1,0 +1,10 @@
+{
+  "name": "aihlete money",
+  "short_name": "money",
+  "description": "What comes in, what goes out, what's left.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030304",
+  "theme_color": "#030304",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
